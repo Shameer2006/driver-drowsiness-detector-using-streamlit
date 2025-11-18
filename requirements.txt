@@ -4,3 +4,4 @@ mediapipe
 scipy
 requests
 av
+streamlit-webrtc
