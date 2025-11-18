@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 from scipy.spatial import distance as dist
 import requests
+import socket
 
 # MediaPipe Face Mesh setup
 mp_face_mesh = mp.solutions.face_mesh
@@ -92,6 +93,40 @@ def process_frame(frame, frame_counter, drowsy_status, eye_ar_thresh, eye_ar_con
 
     return frame, frame_counter, drowsy_status, ear
 
+def test_esp32_connection(esp32_ip):
+    """
+    Test ESP32 connectivity with multiple methods
+    """
+    print(f"Testing connection to ESP32 at {esp32_ip}...")
+    
+    # Test 1: Ping test
+    import subprocess
+    try:
+        result = subprocess.run(['ping', '-n', '1', esp32_ip], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            print("✓ Ping successful")
+        else:
+            print("✗ Ping failed")
+    except:
+        print("✗ Ping test failed")
+    
+    # Test 2: Socket test
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3.0)
+        result = sock.connect_ex((esp32_ip, 80))
+        sock.close()
+        if result == 0:
+            print("✓ Port 80 reachable")
+            return True
+        else:
+            print("✗ Port 80 not reachable")
+            return False
+    except Exception as e:
+        print(f"✗ Socket test failed: {e}")
+        return False
+
 def send_signal_to_esp32(esp32_ip, status):
     """
     Sends a signal to the ESP32 to turn the buzzer on or off.
@@ -99,22 +134,40 @@ def send_signal_to_esp32(esp32_ip, status):
     """
     action = 'on' if status else 'off'
     url = f"http://{esp32_ip}/{action}"
+    
+    # Longer timeout for OFF signals
+    timeout = 8.0 if not status else 5.0
+    
+    print(f"Attempting {action.upper()} to {url} (timeout: {timeout}s)")
+    
     try:
-        response = requests.get(url, timeout=1.5)
+        # Quick connectivity check
+        if not test_esp32_connection(esp32_ip):
+            message = f"ESP32 at {esp32_ip} not reachable - Check IP/WiFi"
+            return False, message
+        
+        # Send HTTP request
+        response = requests.get(url, timeout=timeout)
+        
         if response.status_code == 200:
-            message = f"Successfully turned buzzer {action.upper()}"
-            print(message)
+            message = f"Buzzer {action.upper()} successful"
+            print(f"ESP32 Response: {response.text}")
             return True, message
         else:
-            message = f"Error: ESP32 returned status code {response.status_code}"
-            print(message)
+            message = f"ESP32 error: Status {response.status_code}"
+            print(f"Response: {response.text}")
             return False, message
-    except requests.exceptions.Timeout:
-        message = "Error: Request to ESP32 timed out. Check IP address and Wi-Fi."
+            
+    except socket.timeout:
+        message = "Socket timeout - ESP32 not responding on port 80"
         print(message)
         return False, message
-    except requests.exceptions.RequestException as e:
-        message = f"Error: Failed to connect to ESP32. Check network. Details: {e}"
+    except requests.exceptions.Timeout:
+        message = f"HTTP timeout after {timeout}s - ESP32 overloaded"
+        print(message)
+        return False, message
+    except Exception as e:
+        message = f"Connection error: {str(e)[:80]}"
         print(message)
         return False, message
 
